@@ -1,53 +1,78 @@
 #include <Arduino.h>
 #include <vector>
-
-#define TX_LED_PIN GPIO_NUM_32
-#define RX_LED_PIN GPIO_NUM_33
+#include <ledhelper.h>
+#include <messagehandler.h>
+#include <WiFi.h>
+#include "transmissionhelpers.h"
 
 #define RX_PIN 22   // Serial1 receive pin (connected to RP2040 transmit pin)
 #define TX_PIN 19   // Serial1 transmit pin (connected to RP2040 receive pin)
 
-#define START_HEADER 0x01
-#define START_TEXT 0x02
-#define END_TEXT 0x03
-#define END_TRANSMISSION 0x04
-#define ESCAPE_CHAR 0x1B
+#ifndef WIFI_SSID
+#define WIFI_SSID "(no ssid set)"
+#endif
+
+#ifndef WIFI_PASSWORD
+#define WIFI_PASSWORD "(no password set)"
+#endif
+
+ulong lastSentMessage = millis();
+
+typedef std::string Error;
 
 void setup() {
-    pinMode(TX_LED_PIN, OUTPUT);
-    pinMode(RX_LED_PIN, OUTPUT);
+    pinMode(BLUE_LED_PIN, OUTPUT);
+    pinMode(YELLOW_LED_PIN, OUTPUT);
     Serial.begin(921600);
 
     // Set up the PI PICO serial port
     Serial1.begin(921600, SERIAL_8N1, RX_PIN, TX_PIN);
+
+    // print mac address
+    Serial.print("MAC: ");
+    Serial.println(WiFi.macAddress());
+
+    // connect to Wi-Fi
+    WiFiClass::mode(WIFI_STA);
+
+    // set name of this device for the router to see
+    WiFiClass::setHostname("UDOO-KEY-1");
+
+    WiFi.disconnect();
 }
 
 // define the variables that could be used over multiple loops if a message is incomplete during that loop
-typedef struct {
-    std::string header;
-    std::string body;
-} Message;
-
-std::vector<Message> receiveChannel;
-std::vector<Message> sendChannel;
-std::string currentHeader;
-std::string currentBody;
-bool isTransmissionCorrupt = false;
-bool isStreamingHeader = false;
-bool isStreamingBody = false;
-bool isStreamingChecksum = false;
-bool isEscaping = false;
-u_long lastLEDToggleTime = 0;
-bool LEDState = false;
 
 void loop() {
+    // if Wi-Fi is disconnected, reconnect
+    if (!WiFi.isConnected()) {
+
+        WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+
+        while (!WiFi.isConnected()) {
+            Serial.println("Connecting to Wi-Fi...");
+            Serial.println(WIFI_SSID);
+            delay(100);
+        }
+
+        // make a request to the server to get the IP address
+        WiFiClient client;
+
+        if (!client.connect("google.com", 443)) {
+            Serial.println("Connection to server failed");
+            return;
+        }
+
+        client.stop();
+    }
+
+    // turn off the LED if it's been on for the required time
+    ledTick();
+
     // if there is data on the serial port to be read, read all the bytes until there are no more
     while (Serial1.available()) {
-        // define currentHeader, currentBody, isStreamingHeader, isStreamingBody, isEscaping
-
         // set the rx led to on
-        digitalWrite(RX_LED_PIN, HIGH);
-        ulong ledOnTime = millis();
+        turnOnLed(YELLOW_LED_PIN);
 
         // read the next byte
         uint8_t data = Serial1.read();
@@ -56,146 +81,72 @@ void loop() {
         Serial.print("Receiving: ");
         Serial.println((char) data);
 
-        // if the byte is the start of the header and is not being escaped
-        if (data == START_HEADER && !isEscaping) {
-            // set header to streaming and body to not streaming
-            isStreamingHeader = true;
-            isStreamingBody = false;
-            // reset the current header
-            currentHeader.clear();
-            // if the byte is the start of the body and is not being escaped
-        } else if (data == START_TEXT && !isEscaping) {
-            // set the body to streaming
-            isStreamingBody = true;
-            isStreamingHeader = false;
-            // reset the current body
-            currentBody.clear();
-            // if the byte is the end of the body and is not being escaped
-        } else if ((data == END_TEXT || data == END_TRANSMISSION) && isStreamingBody && !isEscaping) {
-            // set the body to not streaming
-            isStreamingBody = false;
-            isStreamingHeader = false;
-
-            receiveChannel.insert(receiveChannel.end(), {currentHeader, currentBody});
-            // if the byte is the end of the transmission and is not being escaped
-        } else if (data == ESCAPE_CHAR && !isEscaping) {
-            isEscaping = true;
-        } else if (isStreamingHeader) {
-            // Add the next byte to the current header
-            currentHeader.insert(currentHeader.end(), data);
-            isEscaping = false;
-        } else if (isStreamingBody) {
-            // Add the next byte to the current body
-            currentBody.insert(currentBody.end(), data);
-            isEscaping = false;
-        }
-
-        if (millis() - ledOnTime < 10) {
-            delay(10 - (millis() - ledOnTime));
-        }
-
-        // set the rx led to off
-        digitalWrite(RX_LED_PIN, LOW);
+        HandleReceiveByte(data);
     }
 
     // if there is data on the send channel, send it
-    if (!sendChannel.empty()) {
+    while (!sendChannel.empty()) {
         // we need to escape the StartHeader, StartText, EndText and EndTransmission bytes
         // , so we can use them to mark the start and end of the header and body
         // we do this by adding an EscapeChar before the byte
         // this way we can differentiate between the bytes that mark the start and end of the header and body
 
         // get the next header and body from the send channel
-        Message data = sendChannel[0];
+        WireTransmission data = sendChannel[0];
 
-        // send over debugging serial what we're sending as strings
-//        Serial.print("Sending header: ");
-//        for (uint8_t b : data.header) {
-//            Serial.print((char) b);
-//        }
-//
-//        Serial.print("Sending body: ");
-//        for (uint8_t b : data.body) {
-//            Serial.print((char) b);
-//        }
-//
-//        Serial.println();
+        turnOnLed(BLUE_LED_PIN);
 
-        // set the TX LED to on
-        digitalWrite(TX_LED_PIN, HIGH);
-        ulong ledOnTime = millis();
+        std::pair<std::vector<byte>, Error> wtData = serializeWireTransmission(data);
 
-        // send the header
-        Serial1.write(START_HEADER);
-        for (uint8_t b : data.header) {
-            if (b == START_HEADER || b == START_TEXT || b == END_TEXT || b == END_TRANSMISSION) {
-                Serial1.write(ESCAPE_CHAR);
-            }
+        if (!wtData.second.empty()) {
+            continue;
+        }
+
+        // send it byte by byte
+        for (byte b : wtData.first) {
             Serial1.write(b);
         }
-        Serial1.write(START_TEXT);
-        for (uint8_t b : data.body) {
-            if (b == START_HEADER || b == START_TEXT || b == END_TEXT || b == END_TRANSMISSION) {
-                Serial1.write(ESCAPE_CHAR);
-            }
-            Serial1.write(b);
-        }
-        Serial1.write(END_TEXT);
-        Serial1.write(END_TRANSMISSION);
-
-        if (millis() - ledOnTime < 10) {
-            delay(10 - (millis() - ledOnTime));
-        }
-
-        // set the TX LED to off
-        digitalWrite(TX_LED_PIN, LOW);
 
         // remove the header and body from the send channel
         sendChannel.erase(sendChannel.begin());
     }
 
+    if (lastSentMessage + 5000 < millis()) {
+        WireTransmission wt;
+        wt.headers.push_back({"type", "ping"});
+        wt.body = "ping";
+
+        SendMessage(wt);
+
+        lastSentMessage = millis();
+    }
+
     // if there is data on the receipt channel, process it
     if (!receiveChannel.empty()) {
-        // get the next header and body from the receipt channel
-        Message data = receiveChannel[0];
+        WireTransmission message = receiveChannel[0];
 
-        // define a string using strings library
+        // handle rebroadcasts separately as they're not a message we'd want to handle with a custom handler
+        if (getHeader(message.headers, "type") == "requestRebroadcast") {
+            // parse str int
+            try {
+                int rebroadcastID = std::stoi(message.body);
 
-        // process the header and body
-        if (data.header == "☺Response") {
-            if (data.body == "☺") {
-                LEDState = true;
-            } else if (data.body == "☹") {
-                LEDState = false;
+                Error err = Rebroadcast(rebroadcastID);
+
+                if (!err.empty()) {
+                    Serial.println(err.c_str());
+                }
+                // catch int parse error
+            } catch (std::invalid_argument const& ex) {
+                Serial.println("invalid argument");
+            } catch (std::out_of_range const& ex) {
+                Serial.println("out of range");
             }
+        } else {
+            HandleMessage(message);
         }
 
-
-        // remove the header and body from the receipt channel
+        // remove the message from the receipt channel
         receiveChannel.erase(receiveChannel.begin());
     }
-
-    // send a LED -> PI PICO message every 5 seconds
-    if (millis() - lastLEDToggleTime > 5000) {
-        // add the message to the send channel (header: "led")
-        if (LEDState) {
-            // turn off
-            sendChannel.insert(sendChannel.end(), {"☺", "☹"});
-        } else {
-            // turn on
-            sendChannel.insert(sendChannel.end(), {"☺", "☺"});
-        }
-
-        // set the last led toggle time to now
-        lastLEDToggleTime = millis();
-    }
-}
-
-uint8_t utf8Encode(std::string str) {
-    uint8_t utf8Char = 0;
-    for (uint8_t b : str) {
-        utf8Char = utf8Char << 8;
-        utf8Char = utf8Char | b;
-    }
-    return utf8Char;
 }
