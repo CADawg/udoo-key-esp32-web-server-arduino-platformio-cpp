@@ -59,10 +59,10 @@ std::pair<WireTransmission, Error> deserializeWireTransmission(const std::string
             // parse str int
             int rebroadcastID = std::stoi(rebroadcastHeader);
 
-            Error err = RequestRebroadcast(rebroadcastID);
+            std::pair<int, Error> data = RequestRebroadcast(rebroadcastID);
 
-            if (!err.empty()) {
-                return std::make_pair(wireTransmission, err);
+            if (!data.second.empty()) {
+                return std::make_pair(wireTransmission, data.second);
             }
 
             return std::make_pair(wireTransmission, ERR_CHECKSUM_INVALID_REQUESTED_REBROADCAST);

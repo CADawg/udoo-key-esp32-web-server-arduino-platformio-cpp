@@ -50,7 +50,7 @@ Error Rebroadcast(int id) {
     return "";
 }
 
-Error SendMessage(WireTransmission wt) {
+std::pair<int, Error> SendMessage(WireTransmission wt) {
     // get ID
     int id = GetAvailableID();
 
@@ -63,7 +63,7 @@ Error SendMessage(WireTransmission wt) {
     std::pair<std::string, Error> test = serializeHeaders(wt.headers);
 
     if (!test.second.empty()) {
-        return test.second;
+        return std::make_pair(-1, test.second);
     }
 
     sendChannel.push_back(wt);
@@ -71,10 +71,10 @@ Error SendMessage(WireTransmission wt) {
     // add to cache (evicting oldest)
     sendCache[id] = &wt;
 
-    return "";
+    return std::make_pair(id, "");
 }
 
-Error RequestRebroadcast(int id) {
+std::pair<int, Error> RequestRebroadcast(int id) {
     WireTransmission wt;
     wt.headers.push_back({"type", "requestRebroadcast"});
     wt.body = std::to_string(id);

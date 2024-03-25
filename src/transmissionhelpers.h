@@ -46,7 +46,7 @@ Error Rebroadcast(int id);
  * @param wt The message to be sent.
  * @return An error string if there's an issue.
  */
-Error SendMessage(WireTransmission wt);
+std::pair<int, Error> SendMessage(WireTransmission wt);
 
 /**
  * Request a rebroadcast of a message by its ID.
@@ -54,7 +54,7 @@ Error SendMessage(WireTransmission wt);
  * @param id The ID of the message.
  * @return An error string if there's an issue.
  */
-Error RequestRebroadcast(int id);
+std::pair<int, Error> RequestRebroadcast(int id);
 
 /**
  * Handle an incoming byte of data.

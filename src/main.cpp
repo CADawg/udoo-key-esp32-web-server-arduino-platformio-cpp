@@ -20,28 +20,43 @@ ulong lastSentMessage = millis();
 
 typedef std::string Error;
 
+WiFiServer server(80);
+
 void setup() {
     pinMode(BLUE_LED_PIN, OUTPUT);
     pinMode(YELLOW_LED_PIN, OUTPUT);
-    Serial.begin(921600);
+    Serial.begin(115200);
 
     // Set up the PI PICO serial port
-    Serial1.begin(921600, SERIAL_8N1, RX_PIN, TX_PIN);
+    Serial1.begin(115200, SERIAL_8N1, RX_PIN, TX_PIN);
 
     // print mac address
     Serial.print("MAC: ");
     Serial.println(WiFi.macAddress());
 
-    // connect to Wi-Fi
+    // connect to Wi-Fi921600
     WiFiClass::mode(WIFI_STA);
 
     // set name of this device for the router to see
-    WiFiClass::setHostname("UDOO-KEY-1");
+    WiFi.config(INADDR_NONE, INADDR_NONE, INADDR_NONE, INADDR_NONE, INADDR_NONE);
+    WiFi.setHostname("UDOO-KEY-1");
 
     WiFi.disconnect();
+
+    // print free flash space to Serial
+    Serial.print("Free flash: ");
+    Serial.println(ESP.getFreeSketchSpace());
+    Serial.print("Total Flash: ");
+    Serial.println(ESP.getFlashChipSize());
 }
 
 // define the variables that could be used over multiple loops if a message is incomplete during that loop
+
+WiFiClient serverClient;
+bool currentConnectionOpen = false;
+int currentRequestID = -1;
+String mimeType = "";
+ulong requestStartTime = 0;
 
 void loop() {
     // if Wi-Fi is disconnected, reconnect
@@ -55,6 +70,9 @@ void loop() {
             delay(100);
         }
 
+        // get real time from the internet
+        configTime(0, 0, "pool.ntp.org", "time.nist.gov");
+
         // make a request to the server to get the IP address
         WiFiClient client;
 
@@ -64,6 +82,126 @@ void loop() {
         }
 
         client.stop();
+
+        server.stop();
+
+        server.begin();
+
+        Serial.println("Server started");
+    }
+
+    if (!currentConnectionOpen) {
+        // open session on the server
+        serverClient = server.available();
+
+        if (serverClient.connected() && serverClient.available()) {
+            Serial.println("Client connected");
+            currentConnectionOpen = true;
+
+            // reset in case of a new connection
+            LastHttpResponseID = -1;
+            LastHttpResponse = "";
+            LastHttpError = "";
+
+            currentRequestID = -1;
+            mimeType = "";
+            requestStartTime = 0;
+
+            // to prevent slow loris attacks, we'll close the connection after 5 seconds
+            requestStartTime = millis();
+
+            // read the request
+            String request = serverClient.readStringUntil('\r');
+
+            String requestURL = request.substring(5, request.indexOf(" ", 5));
+
+            // ask the pico for this webpages data
+            WireTransmission wt;
+
+            wt.headers.push_back({"type", "http"});
+            wt.headers.push_back({"url", requestURL.c_str()});
+            wt.body = "";
+
+            std::pair<int, Error> data = SendMessage(wt);
+
+            if (!data.second.empty()) {
+                Serial.println("Error sending message: ");
+                Serial.println(data.second.c_str());
+                serverClient.stop();
+                currentConnectionOpen = false;
+            } else {
+                currentRequestID = data.first;
+
+                // work out mime type by file extension (split on . and take the last element)
+                mimeType = "text/html";
+
+                size_t lastDot = requestURL.lastIndexOf(".");
+                mimeType = "text/html";
+
+                if (lastDot != -1 && lastDot < requestURL.length() - 1) {
+                    String extension = requestURL.substring(lastDot + 1, requestURL.length()).c_str();
+
+                    if (extension == "css") {
+                        mimeType = "text/css";
+                    } else if (extension == "js") {
+                        mimeType = "text/javascript";
+                    } else if (extension == "ico") {
+                        mimeType = "image/x-icon";
+                    } else if (extension == "svg") {
+                        mimeType = "image/svg+xml";
+                    } else if (extension == "json") {
+                        mimeType = "application/json";
+                    } else if (extension == "txt") {
+                        mimeType = "text/plain";
+                    } else {
+                        mimeType = "text/html";
+                    }
+                }
+            }
+        }
+    } else {
+        // if the connection has been open for more than 5 seconds, close it
+        if (requestStartTime + 10000 < millis()) {
+            Serial.println("Timeout");
+            serverClient.println("HTTP/1.1 408 Request Timeout");
+            serverClient.println("Content-Type: text/html");
+            serverClient.println("Connection: close");
+            serverClient.println();
+            serverClient.println("<!DOCTYPE HTML>");
+            serverClient.println("<html>");
+            serverClient.println("<h1>Request timed out</h1>");
+            serverClient.println("<p>UDOO Key Webserver</p>");
+            serverClient.println("</html>");
+
+            currentConnectionOpen = false;
+            serverClient.stop();
+        } else {
+            // check if we have the response
+            if (LastHttpResponseID == currentRequestID && currentRequestID != -1) {
+                serverClient.println("HTTP/1.1 200 OK");
+                serverClient.println("Content-Type: " + mimeType);
+                serverClient.println("Connection: close");
+                serverClient.println();
+                serverClient.println(LastHttpResponse.c_str());
+
+                currentConnectionOpen = false;
+                serverClient.stop();
+            } else if (!LastHttpError.isEmpty()) {
+                serverClient.println("HTTP/1.1 500 Internal Server Error");
+                serverClient.println("Content-Type: text/html");
+                serverClient.println("Connection: close");
+                serverClient.println();
+                serverClient.println("<!DOCTYPE HTML>");
+                serverClient.println("<html>");
+                serverClient.println("<h1>Internal Server Error</h1>");
+                serverClient.println("<p>" + LastHttpError + "</p>");
+                serverClient.println("<p>UDOO Key Webserver</p>");
+                serverClient.println("</html>");
+
+                currentConnectionOpen = false;
+                serverClient.stop();
+            }
+        }
     }
 
     // turn off the LED if it's been on for the required time
@@ -78,8 +216,8 @@ void loop() {
         uint8_t data = Serial1.read();
 
         // print to debugging serial what we're receiving as strings
-        Serial.print("Receiving: ");
-        Serial.println((char) data);
+        //Serial.print("Receiving: ");
+        //Serial.println((char) data);
 
         HandleReceiveByte(data);
     }
