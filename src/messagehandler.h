@@ -15,7 +15,7 @@
 void HandleMessage(const WireTransmission& message);
 
 extern int LastHttpResponseID;
-extern String LastHttpResponse;
-extern String LastHttpError;
+extern std::basic_string<char> LastHttpResponse;
+extern std::basic_string<char> LastHttpError;
 
 #endif // ARDUINO_WEBSERVER_MESSAGEHANDLER_H

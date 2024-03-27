@@ -127,14 +127,22 @@ void loop() {
             if (!data.second.empty()) {
                 Serial.println("Error sending message: ");
                 Serial.println(data.second.c_str());
+
+                serverClient.println("HTTP/1.1 500 Internal Server Error");
+                serverClient.println("Content-Type: text/html");
+                serverClient.println("Connection: close");
+                serverClient.println();
+                serverClient.println("<!DOCTYPE HTML>");
+                serverClient.println("<html>");
+                serverClient.println("<h1>Internal Server Error</h1>");
+                serverClient.println("<p>UDOO Key Webserver</p>");
+                serverClient.println("</html>");
                 serverClient.stop();
                 currentConnectionOpen = false;
             } else {
                 currentRequestID = data.first;
 
                 // work out mime type by file extension (split on . and take the last element)
-                mimeType = "text/html";
-
                 size_t lastDot = requestURL.lastIndexOf(".");
                 mimeType = "text/html";
 
@@ -153,6 +161,8 @@ void loop() {
                         mimeType = "application/json";
                     } else if (extension == "txt") {
                         mimeType = "text/plain";
+                    } else if (extension == "webp") {
+                        mimeType = "image/webp";
                     } else {
                         mimeType = "text/html";
                     }
@@ -182,11 +192,13 @@ void loop() {
                 serverClient.println("Content-Type: " + mimeType);
                 serverClient.println("Connection: close");
                 serverClient.println();
-                serverClient.println(LastHttpResponse.c_str());
+
+                // print the full basic_string ignoring the null terminator
+                serverClient.write(LastHttpResponse.c_str(), LastHttpResponse.length());
 
                 currentConnectionOpen = false;
                 serverClient.stop();
-            } else if (!LastHttpError.isEmpty()) {
+            } else if (!LastHttpError.empty()) {
                 serverClient.println("HTTP/1.1 500 Internal Server Error");
                 serverClient.println("Content-Type: text/html");
                 serverClient.println("Connection: close");
@@ -194,7 +206,9 @@ void loop() {
                 serverClient.println("<!DOCTYPE HTML>");
                 serverClient.println("<html>");
                 serverClient.println("<h1>Internal Server Error</h1>");
-                serverClient.println("<p>" + LastHttpError + "</p>");
+                serverClient.print("<p>");
+                serverClient.print(LastHttpError.c_str());
+                serverClient.println("</p>");
                 serverClient.println("<p>UDOO Key Webserver</p>");
                 serverClient.println("</html>");
 

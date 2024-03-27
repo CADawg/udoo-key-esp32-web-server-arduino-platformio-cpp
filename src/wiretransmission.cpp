@@ -77,7 +77,7 @@ std::pair<WireTransmission, Error> deserializeWireTransmission(const std::string
 }
 
 std::vector<byte> EncodeByteSafe(byte b) {
-    if (b == START_HEADER || b == START_TEXT || b == END_TEXT || b == END_TRANSMISSION) {
+    if (b == START_HEADER || b == START_TEXT || b == END_TEXT || b == END_TRANSMISSION || b == ESCAPE_CHAR) {
         return {ESCAPE_CHAR, b};
     }
 

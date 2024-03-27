@@ -6,8 +6,8 @@
 #include <wiretransmission.h>
 
 int LastHttpResponseID;
-String LastHttpResponse;
-String LastHttpError;
+std::basic_string<char> LastHttpResponse;
+std::basic_string<char> LastHttpError;
 
 void HandleMessage(const WireTransmission& message) {
     // print message neatly
@@ -47,11 +47,11 @@ void HandleMessage(const WireTransmission& message) {
         if (statusHeader == "ok") {
             LastHttpError = "";
             // parse body
-            LastHttpResponse = message.body.c_str();
+            LastHttpResponse = message.body;
         } else {
             LastHttpError = "http error";
             // parse body
-            LastHttpError = message.body.c_str();
+            LastHttpError = message.body;
         }
 
         // display the result
