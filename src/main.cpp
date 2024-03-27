@@ -58,6 +58,19 @@ int currentRequestID = -1;
 String mimeType = "";
 ulong requestStartTime = 0;
 
+String getFormattedTime() {
+    struct tm timeinfo;
+    if (!getLocalTime(&timeinfo)) {
+        return "Failed to obtain time";
+    }
+
+    // Create a string to represent the timestamp
+    char strftime_buf[64];
+    strftime(strftime_buf, sizeof(strftime_buf), "%Y-%m-%d %H:%M:%S", &timeinfo);
+
+    return {strftime_buf};
+}
+
 void loop() {
     // if Wi-Fi is disconnected, reconnect
     if (!WiFi.isConnected()) {
@@ -171,7 +184,7 @@ void loop() {
         }
     } else {
         // if the connection has been open for more than 5 seconds, close it
-        if (requestStartTime + 10000 < millis()) {
+        if (requestStartTime + 2000 < millis()) {
             Serial.println("Timeout");
             serverClient.println("HTTP/1.1 408 Request Timeout");
             serverClient.println("Content-Type: text/html");
@@ -193,8 +206,16 @@ void loop() {
                 serverClient.println("Connection: close");
                 serverClient.println();
 
-                // print the full basic_string ignoring the null terminator
-                serverClient.write(LastHttpResponse.c_str(), LastHttpResponse.length());
+                // if it's html replace the hard coded strings {serve_location} and {utc_timestamp}
+                if (mimeType == "text/html") {
+                    String response = LastHttpResponse.c_str();
+                    response.replace("{serve_location}", "Pi Pico (Uncached)");
+                    response.replace("{utc_timestamp}", getFormattedTime());
+
+                    serverClient.println(response);
+                } else {
+                    serverClient.write(LastHttpResponse.c_str(), LastHttpResponse.length());
+                }
 
                 currentConnectionOpen = false;
                 serverClient.stop();
