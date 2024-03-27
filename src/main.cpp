@@ -3,6 +3,7 @@
 #include <ledhelper.h>
 #include <messagehandler.h>
 #include <WiFi.h>
+#include <map>
 #include "transmissionhelpers.h"
 
 #define RX_PIN 22   // Serial1 receive pin (connected to RP2040 transmit pin)
@@ -57,6 +58,14 @@ bool currentConnectionOpen = false;
 int currentRequestID = -1;
 String mimeType = "";
 ulong requestStartTime = 0;
+
+typedef struct {
+    uint64_t timestamp;
+    std::basic_string<char> response;
+} ResponseCacheEntry;
+
+// make a map to cache the latest responses
+typedef std::map<String, ResponseCacheEntry> ResponseCache;
 
 String getFormattedTime() {
     struct tm timeinfo;
