@@ -213,16 +213,22 @@ void loop() {
                 serverClient.println("HTTP/1.1 200 OK");
                 serverClient.println("Content-Type: " + mimeType);
                 serverClient.println("Connection: close");
-                serverClient.println();
 
                 // if it's html replace the hard coded strings {serve_location} and {utc_timestamp}
                 if (mimeType == "text/html") {
+                    serverClient.println("Cache-Control: no-cache");
+                    serverClient.println();
                     String response = LastHttpResponse.c_str();
                     response.replace("{serve_location}", "Pi Pico (Uncached)");
                     response.replace("{utc_timestamp}", getFormattedTime());
 
                     serverClient.println(response);
+                } else if (mimeType == "image/webp") {
+                    serverClient.println("Cache-Control: public, max-age=31536000, immutable");
+                    serverClient.println();
+                    serverClient.write(LastHttpResponse.c_str(), LastHttpResponse.length());
                 } else {
+                    serverClient.println();
                     serverClient.write(LastHttpResponse.c_str(), LastHttpResponse.length());
                 }
 
