@@ -9,6 +9,10 @@ int LastHttpResponseID;
 std::basic_string<char> LastHttpResponse;
 std::basic_string<char> LastHttpError;
 
+ResponseCache responseCache;
+
+int CacheExpirationTime = 60 * 5 * 1000;  // 5 mins
+
 void HandleMessage(const WireTransmission& message) {
     // print message neatly
     Serial.println();
@@ -48,6 +52,17 @@ void HandleMessage(const WireTransmission& message) {
             LastHttpError = "";
             // parse body
             LastHttpResponse = message.body;
+
+            // get the url from the headers
+            String url = getHeader(message.headers, "url").c_str();
+
+            struct tm timeinfo;
+            getLocalTime(&timeinfo);
+
+            // Update the std::map with the latest response
+            ResponseCacheEntry entry = {millis(), timeinfo, LastHttpResponse};
+
+            responseCache[url] = entry;
         } else {
             LastHttpError = "http error";
             // parse body
@@ -60,4 +75,21 @@ void HandleMessage(const WireTransmission& message) {
         Serial.println(LastHttpResponse.c_str());
         Serial.println(LastHttpError.c_str());
     }
+}
+
+ResponseCacheEntry GetResponseCacheEntry(const String& url, bool acceptExpired) {
+    // check if the url is in the cache
+    if (responseCache.find(url) == responseCache.end()) {
+        return {}; // return an empty object
+    }
+
+    // get the entry
+    ResponseCacheEntry entry = responseCache[url];
+
+    // check if the entry is expired
+    if (!acceptExpired && entry.timestamp + CacheExpirationTime < millis()) {
+        return {}; // return an empty object
+    }
+
+    return entry;
 }

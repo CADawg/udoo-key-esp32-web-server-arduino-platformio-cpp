@@ -23,6 +23,10 @@ std::vector<WireTransmission*> sendCache(128);
 // send cache index
 int sendCacheIndex = 0;
 
+bool IsStreaming() {
+    return isStreamingHeader || isStreamingBody || isStreamingChecksum;
+}
+
 int GetAvailableID() {
     sendCacheIndex += 1;
     if (sendCacheIndex >= sendCache.size()) {

@@ -17,11 +17,13 @@
 #define WIFI_PASSWORD "(no password set)"
 #endif
 
-ulong lastSentMessage = millis();
+ulong lastSentMessage = 0;
 
 typedef std::string Error;
 
 WiFiServer server(80);
+
+// add caching on this side
 
 void setup() {
     pinMode(BLUE_LED_PIN, OUTPUT);
@@ -59,13 +61,14 @@ int currentRequestID = -1;
 String mimeType = "";
 ulong requestStartTime = 0;
 
-typedef struct {
-    uint64_t timestamp;
-    std::basic_string<char> response;
-} ResponseCacheEntry;
+// convert millis to timestamp string
+String getFormattedTimeFor(tm timeinfo) {
+    // Create a string to represent the timestamp
+    char strftime_buf[64];
+    strftime(strftime_buf, sizeof(strftime_buf), "%Y-%m-%d %H:%M:%S", &timeinfo);
 
-// make a map to cache the latest responses
-typedef std::map<String, ResponseCacheEntry> ResponseCache;
+    return {strftime_buf};
+}
 
 String getFormattedTime() {
     struct tm timeinfo;
@@ -79,6 +82,10 @@ String getFormattedTime() {
 
     return {strftime_buf};
 }
+
+int64_t LastReceivedMessageByte = 0;
+
+String requestURL;
 
 void loop() {
     // if Wi-Fi is disconnected, reconnect
@@ -117,6 +124,8 @@ void loop() {
         serverClient = server.available();
 
         if (serverClient.connected() && serverClient.available()) {
+            turnOnLed(YELLOW_LED_PIN);
+
             Serial.println("Client connected");
             currentConnectionOpen = true;
 
@@ -135,7 +144,65 @@ void loop() {
             // read the request
             String request = serverClient.readStringUntil('\r');
 
-            String requestURL = request.substring(5, request.indexOf(" ", 5));
+            requestURL = request.substring(5, request.indexOf(" ", 5));
+
+            // work out mime type by file extension (split on . and take the last element)
+            size_t lastDot = requestURL.lastIndexOf(".");
+            mimeType = "text/html";
+
+            if (lastDot != -1 && lastDot < requestURL.length() - 1) {
+                String extension = requestURL.substring(lastDot + 1, requestURL.length()).c_str();
+
+                if (extension == "css") {
+                    mimeType = "text/css";
+                } else if (extension == "js") {
+                    mimeType = "text/javascript";
+                } else if (extension == "ico") {
+                    mimeType = "image/x-icon";
+                } else if (extension == "svg") {
+                    mimeType = "image/svg+xml";
+                } else if (extension == "json") {
+                    mimeType = "application/json";
+                } else if (extension == "txt") {
+                    mimeType = "text/plain";
+                } else if (extension == "webp") {
+                    mimeType = "image/webp";
+                } else {
+                    mimeType = "text/html";
+                }
+            }
+
+            // check the cache
+            ResponseCacheEntry entry = GetResponseCacheEntry(requestURL.c_str());
+
+            if (entry.timestamp != 0) {
+                turnOnLed(BLUE_LED_PIN);
+                // we have the data send it back immediately
+                serverClient.println("HTTP/1.1 200 OK");
+                serverClient.println("Content-Type: " + mimeType);
+
+                if (mimeType == "text/html") {
+                    serverClient.println("Cache-Control: no-cache");
+                } else if (mimeType == "image/webp") {
+                    serverClient.println("Cache-Control: public, max-age=31536000, immutable");
+                }
+
+                serverClient.println("Connection: close");
+                serverClient.println();
+
+                if (mimeType == "text/html") {
+                    String response = entry.response.c_str();
+                    response.replace("{serve_location}", "ESP32 (Cached) - Cached at " + getFormattedTimeFor(entry.dateTime));
+                    response.replace("{utc_timestamp}", getFormattedTime());
+
+                    serverClient.write(response.c_str(), response.length());
+                } else {
+                    serverClient.write(entry.response.c_str(), entry.response.length());
+                }
+                serverClient.stop();
+                currentConnectionOpen = false;
+                return;
+            }
 
             // ask the pico for this webpages data
             WireTransmission wt;
@@ -147,6 +214,7 @@ void loop() {
             std::pair<int, Error> data = SendMessage(wt);
 
             if (!data.second.empty()) {
+                turnOnLed(BLUE_LED_PIN);
                 Serial.println("Error sending message: ");
                 Serial.println(data.second.c_str());
 
@@ -163,53 +231,60 @@ void loop() {
                 currentConnectionOpen = false;
             } else {
                 currentRequestID = data.first;
-
-                // work out mime type by file extension (split on . and take the last element)
-                size_t lastDot = requestURL.lastIndexOf(".");
-                mimeType = "text/html";
-
-                if (lastDot != -1 && lastDot < requestURL.length() - 1) {
-                    String extension = requestURL.substring(lastDot + 1, requestURL.length()).c_str();
-
-                    if (extension == "css") {
-                        mimeType = "text/css";
-                    } else if (extension == "js") {
-                        mimeType = "text/javascript";
-                    } else if (extension == "ico") {
-                        mimeType = "image/x-icon";
-                    } else if (extension == "svg") {
-                        mimeType = "image/svg+xml";
-                    } else if (extension == "json") {
-                        mimeType = "application/json";
-                    } else if (extension == "txt") {
-                        mimeType = "text/plain";
-                    } else if (extension == "webp") {
-                        mimeType = "image/webp";
-                    } else {
-                        mimeType = "text/html";
-                    }
-                }
             }
         }
     } else {
         // if the connection has been open for more than 5 seconds, close it
-        if (requestStartTime + 2000 < millis()) {
-            Serial.println("Timeout");
-            serverClient.println("HTTP/1.1 408 Request Timeout");
-            serverClient.println("Content-Type: text/html");
-            serverClient.println("Connection: close");
-            serverClient.println();
-            serverClient.println("<!DOCTYPE HTML>");
-            serverClient.println("<html>");
-            serverClient.println("<h1>Request timed out</h1>");
-            serverClient.println("<p>UDOO Key Webserver</p>");
-            serverClient.println("</html>");
+        if (requestStartTime + 1000 < millis()) {
+            // check if we have it in the cache (even expired)
+            ResponseCacheEntry entry = GetResponseCacheEntry(requestURL, true);
 
-            currentConnectionOpen = false;
-            serverClient.stop();
+            if (entry.timestamp != 0) {
+                turnOnLed(BLUE_LED_PIN);
+                // we have the data send it back immediately
+                serverClient.println("HTTP/1.1 200 OK");
+                serverClient.println("Content-Type: " + mimeType);
+
+                if (mimeType == "text/html") {
+                    serverClient.println("Cache-Control: no-cache");
+                } else if (mimeType == "image/webp") {
+                    serverClient.println("Cache-Control: public, max-age=31536000, immutable");
+                }
+
+                serverClient.println("Connection: close");
+                serverClient.println();
+
+                if (mimeType == "text/html") {
+                    String response = entry.response.c_str();
+                    response.replace("{serve_location}", "ESP32 (Cached) - Cached at " + getFormattedTimeFor(entry.dateTime));
+                    response.replace("{utc_timestamp}", getFormattedTime());
+
+                    serverClient.write(response.c_str(), response.length());
+                } else {
+                    serverClient.write(entry.response.c_str(), entry.response.length());
+                }
+                serverClient.stop();
+                currentConnectionOpen = false;
+            } else {
+                turnOnLed(BLUE_LED_PIN);
+                Serial.println("Timeout");
+                serverClient.println("HTTP/1.1 408 Request Timeout");
+                serverClient.println("Content-Type: text/html");
+                serverClient.println("Connection: close");
+                serverClient.println();
+                serverClient.println("<!DOCTYPE HTML>");
+                serverClient.println("<html>");
+                serverClient.println("<h1>Request timed out</h1>");
+                serverClient.println("<p>UDOO Key Webserver</p>");
+                serverClient.println("</html>");
+
+                currentConnectionOpen = false;
+                serverClient.stop();
+            }
         } else {
             // check if we have the response
             if (LastHttpResponseID == currentRequestID && currentRequestID != -1) {
+                turnOnLed(BLUE_LED_PIN);
                 serverClient.println("HTTP/1.1 200 OK");
                 serverClient.println("Content-Type: " + mimeType);
                 serverClient.println("Connection: close");
@@ -235,6 +310,7 @@ void loop() {
                 currentConnectionOpen = false;
                 serverClient.stop();
             } else if (!LastHttpError.empty()) {
+                turnOnLed(BLUE_LED_PIN);
                 serverClient.println("HTTP/1.1 500 Internal Server Error");
                 serverClient.println("Content-Type: text/html");
                 serverClient.println("Connection: close");
@@ -269,7 +345,14 @@ void loop() {
         //Serial.print("Receiving: ");
         //Serial.println((char) data);
 
+        LastReceivedMessageByte = millis();
+
         HandleReceiveByte(data);
+    }
+
+    // if we haven't received a packet for this byte in 50 millis assume we lost the connection and end it, so we don't hold the connection up for other packets
+    if (LastReceivedMessageByte + 50 < millis() && IsStreaming()) {
+        HandleReceiveByte(END_TRANSMISSION);
     }
 
     // if there is data on the send channel, send it
@@ -299,7 +382,8 @@ void loop() {
         sendChannel.erase(sendChannel.begin());
     }
 
-    if (lastSentMessage + 5000 < millis()) {
+    // send one ping to make sure we're alive
+    if (lastSentMessage == 0) {
         WireTransmission wt;
         wt.headers.push_back({"type", "ping"});
         wt.body = "ping";

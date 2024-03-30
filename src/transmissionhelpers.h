@@ -63,4 +63,6 @@ std::pair<int, Error> RequestRebroadcast(int id);
  */
 void HandleReceiveByte(uint8_t data);
 
+bool IsStreaming();
+
 #endif // ARDUINO_WEBSERVER_TRANSMISSION_HANDLER_H
